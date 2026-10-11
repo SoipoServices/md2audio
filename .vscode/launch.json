@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:md2audio}",
+            "name": "Debug MD2Audio",
+            "target": "MD2Audio",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug MD2Audio"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:md2audio}",
+            "name": "Release MD2Audio",
+            "target": "MD2Audio",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release MD2Audio"
+        }
+    ]
+}
