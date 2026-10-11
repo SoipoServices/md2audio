@@ -1,185 +1,186 @@
 # MD2Audio
 
-<img src="Icon/AppIcon.png" width="128" align="right" alt="Icona MD2Audio">
+<img src="Icon/AppIcon.png" width="128" align="right" alt="MD2Audio icon">
 
-**MD2Audio** è un'app SwiftUI **completamente nativa**: usa le voci di sistema di macOS
-e non richiede software aggiuntivo. Trascini un file Markdown (oppure scrivi o incolli il testo), scegli
-lingua e voce, regoli la lettura e ottieni un file WAV o M4A, che puoi ascoltare direttamente nell'app.
+**MD2Audio** is a **fully native** SwiftUI app: it uses the macOS system voices and needs no extra
+software. Drop in a Markdown file (or type or paste text), pick a language and voice, adjust the reading
+and get a WAV or M4A file, which you can play right in the app.
 
-In modalità Text → Audio, a sinistra c'è l'editor del testo: il file trascinato o scelto viene caricato lì
-e puoi modificarlo prima della conversione (il file originale non viene modificato). Puoi anche scrivere
-direttamente, incollare con ⌘V o con il pulsante **Paste**, e svuotare l'editor con **Clear**. Viene letto
-esattamente il testo presente nell'editor. L'audio viene salvato accanto al file caricato oppure, per il
-testo scritto o incollato, in `Documenti/Speech.m4a` (modificabile con **Change…**).
+In Text → Audio mode, the text editor is on the left: a dropped or chosen file is loaded there and you
+can edit it before converting (the original file is not changed). You can also type directly, paste with
+⌘V or the **Paste** button, and empty the editor with **Clear**. Exactly the text in the editor is read.
+The audio is saved next to the loaded file or, for typed or pasted text, to `Documents/Speech.m4a`
+(change it with **Change…**).
 
-L'app ha due modalità, selezionabili in alto nella finestra:
+The app has two modes, selectable at the top of the window:
 
-- **Text → Audio**: da Markdown a file audio (descritta sotto);
-- **Audio → Text**: trascrizione di un file audio (vedi [Da audio a testo](#da-audio-a-testo)).
+- **Text → Audio**: from Markdown to an audio file (described below);
+- **Audio → Text**: transcription of an audio file (see [Audio to text](#audio-to-text)).
 
-## Opzioni
+## Options
 
-| Opzione | Effetto |
+| Option | Effect |
 |---|---|
-| Speed / Pitch | Velocità e tono della voce |
-| Pause between sentences | Silenzio extra tra le frasi (le frasi sono riconosciute in base alla lingua) |
-| Pause at commas and dashes | Silenzio extra dentro le frasi: dopo le virgole (1×), dopo `;` e `:` e ai trattini staccati ` - `, `–`, `—` (2×, letti come pausa e non come "meno"), e per ogni spazio in più tra le parole (1× per spazio, max 6×). Numeri come `3,5` o `10:30` e parole come `e-mail` non sono toccati. 0 = disattivato |
-| Pause between blocks | Moltiplicatore delle pause dopo titoli, paragrafi ed elenchi |
-| Variation | Piccola variazione casuale di velocità e tono per ogni frase, per rendere la lettura meno monotona |
-| Read headings slower and lower | I titoli vengono letti un po' più lenti e con tono più basso |
-| Stress bold and italic text | Grassetto e corsivo vengono letti più lenti, con tono più alto e volume leggermente maggiore |
-| Skip emoji | Le emoji non vengono lette |
-| Pronunciations | Una regola per riga, `parola = come dirla` (es. `API = a pi i`) |
-| Format | WAV (non compresso) o M4A (AAC, file molto più piccoli) |
+| Speed / Pitch | Speaking rate and pitch of the voice |
+| Pause between sentences | Extra silence between sentences (sentences are detected according to the language) |
+| Pause at commas and dashes | Extra silence within sentences: after commas (1×), after `;` and `:` and at spaced dashes ` - `, `–`, `—` (2×, read as a pause rather than "minus"), and for each extra space between words (1× per space, max 6×). Numbers like `3,5` or `10:30` and words like `e-mail` are left alone. 0 = off |
+| Pause between blocks | Multiplier for the pauses after headings, paragraphs and lists |
+| Variation | Small random change in rate and pitch for each sentence, to make the reading less monotonous |
+| Read headings slower and lower | Headings are read a little slower and at a lower pitch |
+| Stress bold and italic text | Bold and italic are read slower, at a higher pitch and slightly louder |
+| Skip emoji | Emoji are not read |
+| Pronunciations | One rule per line, `word = how to say it` (e.g. `API = a pi i`) |
+| Format | WAV (uncompressed) or M4A (AAC, much smaller files) |
 
-## Sintassi
+## Syntax
 
-Oltre alle opzioni, alcuni elementi del testo cambiano la lettura (il pulsante **Syntax** sopra l'editor
-mostra questa tabella con le durate correnti; la stessa guida è anche nel menu *Aiuto › MD2Audio Help*, ⌘?):
+Besides the options, some elements of the text change how it is read (the **Syntax** button above the
+editor shows this table with the current durations; the same guide is also in the *Help › MD2Audio Help*
+menu, ⌘?):
 
-| Nel testo | Effetto |
+| In the text | Effect |
 |---|---|
-| `# Titolo` | Letto più lento e più basso, con una pausa prima e dopo |
-| `**grassetto**`, `*corsivo*` | Enfasi: un po' più lento, più alto e più forte |
-| `***` o `---` su una riga a sé | Separatore di sezione: pausa di 2 s |
-| `...` o `…` | Pensiero sospeso: pausa di 500 ms |
-| `,` `;` `:` ` - ` `–` `—` e spazi in più | Pause dentro la frase (vedi *Pause at commas and dashes*) |
-| Codice, immagini, tabelle | Non vengono letti |
+| `# Heading` | Read slower and lower, with a pause before and after |
+| `**bold**`, `*italic*` | Emphasis: a little slower, higher and louder |
+| `***` or `---` on a line of its own | Section break: 2 s pause |
+| `...` or `…` | Trailing thought: 500 ms pause |
+| `,` `;` `:` ` - ` `–` `—` and extra spaces | Pauses within the sentence (see *Pause at commas and dashes*) |
+| Code, images, tables | Not read |
 
-Le pause dei titoli e dei separatori sono scalate da *Pause between blocks*.
+The pauses for headings and section breaks are scaled by *Pause between blocks*.
 
-Il pulsante **Preview** legge i primi blocchi del testo (o una frase di esempio) con le impostazioni correnti.
+The **Preview** button reads the first blocks of the text (or a sample sentence) with the current settings.
 
-## Voci
+## Voices
 
-La differenza più grande la fa la voce: quelle *Enhanced* e *Premium* sono molto più naturali di quelle
-compatte. Il pulsante **Download Voices…** apre *Impostazioni di Sistema › Accessibilità › Contenuti
-letti ad alta voce*: da lì apri il menu *Voce di sistema*, scegli *Gestisci voci…* e scarica le voci che
-ti interessano. L'app le rileva subito e le mostra per prime.
+The voice makes the biggest difference: *Enhanced* and *Premium* voices sound far more natural than the
+compact ones. The **Download Voices…** button opens *System Settings › Accessibility › Spoken Content*:
+from there open the *System voice* menu, choose *Manage Voices…* and download the voices you want. The
+app picks them up immediately and lists them first.
 
-## Da audio a testo
+## Audio to text
 
-Nella modalità **Audio → Text** trascini un file audio (WAV, M4A, MP3, AIFF, CAF…), scegli la lingua e
-premi **Transcribe**. Il riconoscimento avviene interamente sul Mac, con il motore `SpeechAnalyzer`
-di Apple: niente invio a server, nessun limite di durata. Il modello della lingua viene scaricato
-automaticamente al primo utilizzo; nel menu le lingue già scaricate sono segnate con *downloaded*.
+In **Audio → Text** mode, drop an audio file (WAV, M4A, MP3, AIFF, CAF…), choose the language and click
+**Transcribe**. Recognition runs entirely on the Mac, using Apple's `SpeechAnalyzer` engine: nothing is
+sent to a server and there is no length limit. The language model is downloaded automatically the first
+time it is used; languages already downloaded are marked *downloaded* in the menu.
 
-È molto veloce: 40 minuti di audio vengono trascritti in circa 25 secondi.
+It is very fast: 40 minutes of audio are transcribed in about 25 seconds.
 
-| Formato | Contenuto |
+| Format | Content |
 |---|---|
-| Text | Testo semplice, un paragrafo per ogni tratto di parlato |
-| Markdown | Titolo (nome del file) e paragrafi; il file può essere riconvertito in audio |
-| Subtitles (SRT) | Sottotitoli con tempi, righe di massimo ~84 caratteri / 6 secondi |
+| Text | Plain text, one paragraph per stretch of speech |
+| Markdown | Title (file name) and paragraphs; the file can be converted back to audio |
+| Subtitles (SRT) | Timed subtitles, lines of at most ~84 characters / 6 seconds |
 
-L'opzione **Timestamps** aggiunge l'orario di inizio a ogni paragrafo (Text e Markdown).
-Il testo resta modificabile prima di copiarlo o salvarlo con **Save As…**.
+The **Timestamps** option adds the start time to each paragraph (Text and Markdown).
+The text stays editable before you copy it or save it with **Save As…**.
 
-Richiede **macOS 26** o successivo; sulle versioni precedenti è disponibile solo Text → Audio.
+Requires **macOS 26** or later; on earlier versions only Text → Audio is available.
 
-## Compilare l'app
+## Building the app
 
-Requisiti:
+Requirements:
 
-- macOS 14 (Sonoma) o successivo per eseguire l'app (macOS 26+ per la trascrizione)
-- per compilare: SDK di macOS 26 (Xcode 26+) **oppure** i relativi Command Line Tools (`xcode-select --install`)
+- macOS 14 (Sonoma) or later to run the app (macOS 26+ for transcription)
+- to build: the macOS 26 SDK (Xcode 26+) **or** the matching Command Line Tools (`xcode-select --install`)
 
-Compilazione e pacchetti per la distribuzione:
+Build and package for distribution:
 
 ```sh
 ./build_app.sh
 ```
 
-Lo script:
+The script:
 
-1. compila un binario *Universal* (Apple Silicon + Intel) in modalità release;
-2. crea `build/MD2Audio.app` con icona e `Info.plist`;
-3. firma l'app (ad-hoc, oppure con un Developer ID se indicato);
-4. crea in `dist/` un'immagine disco `MD2Audio-<versione>.dmg` (con il collegamento ad
-   *Applicazioni* per l'installazione trascinando) e uno `MD2Audio-<versione>.zip`.
+1. builds a *Universal* binary (Apple Silicon + Intel) in release mode;
+2. creates `build/MD2Audio.app` with its icon and `Info.plist`;
+3. signs the app (ad-hoc, or with a Developer ID if given);
+4. creates in `dist/` a disk image `MD2Audio-<version>.dmg` (with an *Applications* shortcut for
+   drag-and-drop installation) and a `MD2Audio-<version>.zip`.
 
-Variabili d'ambiente opzionali:
+Optional environment variables:
 
-| Variabile | Esempio | Effetto |
+| Variable | Example | Effect |
 |---|---|---|
-| `VERSION` | `VERSION=1.1` | Numero di versione dell'app e nome dei file in `dist/` (default `1.0`) |
-| `SIGN_IDENTITY` | `"Developer ID Application: Nome (TEAMID)"` | Firma con un certificato Developer ID e *hardened runtime* |
-| `NOTARY_PROFILE` | `md2audio` | Invia il DMG ad Apple per la notarizzazione e allega il ticket (richiede `SIGN_IDENTITY`) |
+| `VERSION` | `VERSION=1.1` | App version number and name of the files in `dist/` (default `1.0`) |
+| `SIGN_IDENTITY` | `"Developer ID Application: Name (TEAMID)"` | Sign with a Developer ID certificate and the *hardened runtime* |
+| `NOTARY_PROFILE` | `md2audio` | Submit the DMG to Apple for notarization and staple the ticket (requires `SIGN_IDENTITY`) |
 
-Per lo sviluppo, senza creare il bundle:
+For development, without creating the bundle:
 
 ```sh
 swift run
 ```
 
-oppure apri `Package.swift` con Xcode.
+or open `Package.swift` in Xcode.
 
-Struttura del codice:
+Code layout:
 
 ```
 md2audio/
 ├── Package.swift
-├── build_app.sh               # build, firma e pacchetti DMG/ZIP
+├── build_app.sh               # build, signing and DMG/ZIP packaging
 ├── Icon/
-│   ├── make_icon.swift        # disegna l'icona e genera Resources/AppIcon.icns
-│   └── AppIcon.png            # anteprima 1024×1024
+│   ├── make_icon.swift        # draws the icon and generates Resources/AppIcon.icns
+│   └── AppIcon.png            # 1024×1024 preview
 ├── Resources/AppIcon.icns
 └── Sources/MD2Audio/
     ├── MD2AudioApp.swift      # entry point
-    ├── ContentView.swift      # finestra principale, scelta della modalità
-    ├── SpeakView.swift        # Text → Audio: interfaccia e opzioni
-    ├── SyntaxHelp.swift       # aiuto sulla sintassi che cambia la lettura
-    ├── SpeechScript.swift     # Markdown -> blocchi -> SSML (pause, prosodia, enfasi, pronunce)
-    ├── AppleSpeech.swift      # sintesi con AVSpeechSynthesizer, scrittura WAV/M4A, anteprima
-    ├── Converter.swift        # conversione con avanzamento e annullamento
-    ├── PlayerView.swift       # lettore audio integrato
-    ├── TranscribeView.swift   # Audio → Text: interfaccia
-    ├── Transcriber.swift      # trascrizione con SpeechAnalyzer, formati Text/Markdown/SRT
-    └── FileDropZone.swift     # area di trascinamento dei file
+    ├── ContentView.swift      # main window, mode selection
+    ├── SpeakView.swift        # Text → Audio: interface and options
+    ├── SyntaxHelp.swift       # help on the syntax that changes the reading
+    ├── SpeechScript.swift     # Markdown -> blocks -> SSML (pauses, prosody, emphasis, pronunciations)
+    ├── AppleSpeech.swift      # synthesis with AVSpeechSynthesizer, WAV/M4A writing, preview
+    ├── Converter.swift        # conversion with progress and cancellation
+    ├── PlayerView.swift       # built-in audio player
+    ├── TranscribeView.swift   # Audio → Text: interface
+    ├── Transcriber.swift      # transcription with SpeechAnalyzer, Text/Markdown/SRT formats
+    └── FileDropZone.swift     # file drop area
 ```
 
-Per modificare l'icona, cambia `Icon/make_icon.swift` e rigenerala con:
+To change the icon, edit `Icon/make_icon.swift` and regenerate it with:
 
 ```sh
 swift Icon/make_icon.swift
 ```
 
-## Condividere l'app
+## Sharing the app
 
-Condividi il file `dist/MD2Audio-<versione>.dmg`. Chi lo riceve lo apre e trascina
-**MD2Audio** nella cartella *Applicazioni*.
+Share the `dist/MD2Audio-<version>.dmg` file. The recipient opens it and drags **MD2Audio** into the
+*Applications* folder.
 
-Senza un certificato *Developer ID* l'app è firmata solo ad-hoc, quindi al primo avvio macOS la blocca
-("Apple non può verificare che MD2Audio sia privo di malware"). Basta autorizzarla una volta:
+Without a *Developer ID* certificate the app is only signed ad-hoc, so macOS blocks it on first launch
+("Apple could not verify “MD2Audio” is free of malware"). It only needs to be allowed once:
 
-1. apri l'app e chiudi l'avviso;
-2. vai in *Impostazioni di Sistema › Privacy e sicurezza*, scorri fino al messaggio su MD2Audio e
-   clicca **Apri comunque**, poi conferma.
+1. open the app and dismiss the warning;
+2. go to *System Settings › Privacy & Security*, scroll down to the message about MD2Audio and click
+   **Open Anyway**, then confirm.
 
-In alternativa, da Terminale:
+Alternatively, from Terminal:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/MD2Audio.app
 ```
 
-Per evitare del tutto l'avviso serve l'iscrizione all'[Apple Developer Program](https://developer.apple.com/programs/)
-e un certificato **Developer ID Application** (un certificato *Apple Development* non basta). Poi:
+To avoid the warning entirely you need a membership in the [Apple Developer Program](https://developer.apple.com/programs/)
+and a **Developer ID Application** certificate (an *Apple Development* certificate is not enough). Then:
 
 ```sh
-# una sola volta: salva le credenziali per la notarizzazione nel portachiavi
+# once: store the notarization credentials in the keychain
 xcrun notarytool store-credentials md2audio \
-  --apple-id tua@email.com --team-id TEAMID --password <password-specifica-per-app>
+  --apple-id you@example.com --team-id TEAMID --password <app-specific-password>
 
-SIGN_IDENTITY="Developer ID Application: Nome (TEAMID)" NOTARY_PROFILE=md2audio \
+SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" NOTARY_PROFILE=md2audio \
   VERSION=1.0 ./build_app.sh
 ```
 
-Il DMG risultante si apre su qualsiasi Mac senza avvisi.
+The resulting DMG opens on any Mac without warnings.
 
-## Risoluzione dei problemi
+## Troubleshooting
 
-- **La voce suona robotica**: scarica una voce *Enhanced* o *Premium* (vedi [Voci](#voci)).
-- **Pronuncia sbagliata o accento strano**: la voce e la lingua devono corrispondere; per singole
-  parole usa le *Pronunciations*.
-- **Il Markdown "non ha testo"**: se il documento contiene solo codice, tabelle o immagini,
-  non c'è nulla da leggere.
+- **The voice sounds robotic**: download an *Enhanced* or *Premium* voice (see [Voices](#voices)).
+- **Wrong pronunciation or odd accent**: the voice and the language must match; for individual words
+  use *Pronunciations*.
+- **The Markdown "has no text"**: if the document contains only code, tables or images, there is
+  nothing to read.
