@@ -17,8 +17,9 @@ struct SpeakView: View {
     @AppStorage("emphasis") private var emphasis = true
     @AppStorage("stripEmoji") private var stripEmoji = true
     @AppStorage("naturalIntonation") private var naturalIntonation = true
-    /// Voice for English words in another language: "" = the best one, "off" = no detection.
-    @AppStorage("englishVoice") private var englishVoiceID = ""
+    /// English words in another language: "main" = as the main voice reads them, "guide" = main voice
+    /// with the pronunciation guide, "" = the best English voice, or the identifier of an English voice.
+    @AppStorage("englishWords") private var englishWords = "main"
     @AppStorage("pronunciations") private var pronunciations = "# word = how to say it\n"
 
     @State private var text = ""
@@ -84,7 +85,8 @@ struct SpeakView: View {
             .disabled(converter.isRunning)
             if isBatch {
                 // Stays enabled while running, to scroll and reveal finished files
-                BatchListView(queue: $converter.queue, isRunning: converter.isRunning)
+                BatchListView(queue: $converter.queue, isRunning: converter.isRunning,
+                              onDrop: (Self.markdownTypes, addInput))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
                 editor.disabled(converter.isRunning)
@@ -173,18 +175,21 @@ struct SpeakView: View {
                     .font(.caption).foregroundStyle(.orange)
             }
             if !lang.hasPrefix("en") {
-                Picker("English words", selection: $englishVoiceID) {
-                    Text("Read by the main voice").tag("off")
-                    if let best = AVSpeechSynthesisVoice.best(for: "en", like: mainVoice, in: voices) {
-                        Text("Automatic · \(best.displayName)").tag("")
+                Picker("English words", selection: $englishWords) {
+                    Section("Same voice") {
+                        Text("As the voice reads them").tag("main")
+                        Text("With English pronunciation guide").tag("guide")
                     }
-                    Section("English voices") {
+                    Section("English voice (another speaker)") {
+                        if let best = AVSpeechSynthesisVoice.best(for: "en", like: mainVoice, in: voices) {
+                            Text("Automatic · \(best.displayName)").tag("")
+                        }
                         ForEach(voices.filter { $0.language.hasPrefix("en") }, id: \.identifier) { v in
                             Text("\(v.displayName) · \(languageName(v.language))").tag(v.identifier)
                         }
                     }
                 }
-                Text("English words and phrases are found automatically and read by this voice. To choose yourself, write {en: machine learning}, or {\(lang.prefix(2)): come} to keep a word in the main voice.")
+                Text(englishHelp)
                     .font(.caption).foregroundStyle(.secondary)
             }
             LabeledContent {
@@ -314,18 +319,31 @@ struct SpeakView: View {
         return natural > 0 ? "\(name) · \(natural) natural" : name
     }
 
+    private var englishHelp: String {
+        let own = "{\(lang.prefix(2)): come}"
+        return switch englishWords {
+        case "main":
+            "The voice reads English words its own way. For a word it gets wrong, write {en: deployment}: it is read with the pronunciation from an English dictionary."
+        case "guide":
+            "English words are found automatically and read with the pronunciation from an English dictionary, in the same voice. Write {en: know how} to add one, \(own) to leave one out."
+        default:
+            "English words are found automatically and read by this voice: real English, but another speaker. Write {en: know how} to add one, \(own) to leave one out."
+        }
+    }
+
     private var mainVoice: AVSpeechSynthesisVoice? {
         voices.first { $0.identifier == voiceID }
     }
 
     private var style: SpeechStyle {
-        let voices = voices, main = mainVoice, english = englishVoiceID
+        let voices = voices, main = mainVoice, english = englishWords
         return SpeechStyle(
             speed: speed, pitch: pitch, sentencePauseMs: sentencePause,
             punctuationPauseMs: punctuationPause, variation: variation,
             headingStyle: headingStyle, emphasis: emphasis, stripEmoji: stripEmoji,
             pronunciations: SpeechStyle.parsePronunciations(pronunciations), language: lang,
-            naturalIntonation: naturalIntonation, detectEnglish: english != "off",
+            naturalIntonation: naturalIntonation,
+            english: english == "main" ? .mainVoice : english == "guide" ? .guide : .voice,
             voiceForLanguage: { code in
                 // The chosen English voice, if still installed; any other language gets its best voice
                 if code.lowercased().hasPrefix("en"), voices.contains(where: { $0.identifier == english }) {

@@ -64,7 +64,7 @@ menu, ⌘?):
 | `...` or `…` | Trailing thought: 500 ms pause |
 | `,` `;` `:` ` - ` `–` `—` and extra spaces | Pauses within the sentence (see *Pause at commas and dashes*) |
 | `( aside )` | With *Natural intonation*: a little lower and quicker, with a short pause around it |
-| `{en: machine learning}` | Read by a voice of that language (see [English and other languages](#english-and-other-languages)) |
+| `{en: machine learning}` | Read as English, `{fr: …}` by a French voice (see [English and other languages](#english-and-other-languages)) |
 | `https://www.example.com/page` | Read as `example.com` |
 | Code, images, tables | Not read |
 
@@ -81,29 +81,37 @@ app picks them up immediately and lists them first.
 
 ## English and other languages
 
-A voice reads every word with the sounds of its own language, so English words in an Italian text
-(or Spanish, French…) come out wrong. With **English words** set to a voice (the default is
-*Automatic*, the best English voice installed), English words and phrases are found automatically and
-read by that voice, in the middle of the sentence: the gap between the two voices is removed and their
-volume is levelled.
+The system voices only have the sounds of their own language: an Italian voice cannot be switched to
+real English (English sounds in a pronunciation are simply dropped). The **English words** menu, shown
+when the text is not in English, offers three ways to read English words:
 
-A word is taken as English when it is in the English dictionary and either is not a word of the text's
+| English words | Effect |
+|---|---|
+| As the voice reads them (default) | The main voice reads everything. The Enhanced and Premium voices know many English words already; a few come out wrong |
+| With English pronunciation guide | Same voice. English words are found automatically and the voice is given their pronunciation from an English dictionary, written with its own sounds (*deployment* → "diplòiment"). Italian-accented English: helps with the words the voice gets wrong, a little worse on some it already knew |
+| An English voice | English words are found automatically and read by an English voice: real English, but a different speaker in the middle of the sentence (the gap is removed and the volume levelled). Seamless only with the voices that exist in both languages (Eddy, Flo, Reed…) |
+
+Which of the first two sounds better depends on the voice: try both with **Preview**.
+
+A word is found as English when it is in the English dictionary and either is not a word of the text's
 language (*deployment*, *learning*) or looks unmistakably English (*meeting*, *framework*). Neighbouring
-words that look English join it, so *machine learning*, *smart working* or *state of the art* are read in
-one go. Words the two languages share (*come*, *more*, *computer*, *file*) and acronyms (*API*) stay in
-the main voice.
+words that look English join it, so *machine learning*, *smart working* or *state of the art* are taken
+together. Words the two languages share (*come*, *more*, *computer*, *file*) and acronyms (*API*) are
+left alone, and so are the words with a rule in *Pronunciations*.
 
-When the detection gets it wrong, or for other languages, mark the text yourself:
+To decide yourself:
 
 | In the text | Effect |
 |---|---|
-| `{en: know how}` | Read by the English voice |
+| `{en: deployment}` | English: read with the pronunciation guide (in the first two modes) or by the English voice |
+| `{it: more}` | With the text's own language: never taken as English |
 | `{fr: déjà vu}`, `{de-DE: Zeitgeist}` | Read by the best installed voice of that language (the main voice if there is none) |
-| `{it: more}` | With the text's own language: kept in the main voice, never read as English |
 
-Words with a rule in *Pronunciations* are never read as English. Choose **Read by the main voice** to
-turn the detection off; the `{en: …}` syntax keeps working. The Preview plays the voices one after the
-other, with a short gap that is not in the converted file.
+For a single stubborn word, a rule in *Pronunciations* written the way it sounds
+(`deployment = diploiment`) always works.
+
+The pronunciation guide (`Sources/MD2Audio/Resources/english.dict`, 117,000 words) is built from the
+[CMU Pronouncing Dictionary](https://github.com/cmusphinx/cmudict) by `Tools/make_english_dict.py`.
 
 ## Audio to text
 
@@ -168,6 +176,7 @@ Code layout:
 md2audio/
 ├── Package.swift
 ├── build_app.sh               # build, signing and DMG/ZIP packaging
+├── Tools/make_english_dict.py # builds the English pronunciation guide from the CMU dictionary
 ├── Icon/
 │   ├── make_icon.swift        # draws the icon and generates Resources/AppIcon.icns
 │   └── AppIcon.png            # 1024×1024 preview
@@ -183,6 +192,7 @@ md2audio/
     ├── PlayerView.swift       # built-in audio player
     ├── TranscribeView.swift   # Audio → Text: interface
     ├── Transcriber.swift      # transcription with SpeechAnalyzer, Text/Markdown/SRT formats
+    ├── Resources/english.dict # English pronunciations for the main voice
     ├── Batch.swift            # batch queue, output naming and file list
     └── FileDropZone.swift     # drop area for files and folders
 ```

@@ -73,6 +73,42 @@ enum MarkdownBlocks {
     }
 }
 
+/// How English words are read in a text of another language.
+enum EnglishWords {
+    /// By the main voice, as it reads them. `{en: …}` adds the pronunciation guide.
+    case mainVoice
+    /// Found automatically and read by the main voice with the pronunciation guide.
+    case guide
+    /// Found automatically and read by an English voice.
+    case voice
+}
+
+/// English words written with the sounds every voice has, the way a speaker of Italian says them
+/// ("deployment" -> diˈplɔiment). The system voices only have the sounds of their own language (English
+/// ones are dropped from a <phoneme>), so this is how a voice is told to read an English word.
+/// Built by Tools/make_english_dict.py from the CMU Pronouncing Dictionary.
+enum EnglishPronunciation {
+    static func ipa(for word: String) -> String? {
+        table[word.lowercased()]
+    }
+
+    private static let table: [String: String] = {
+        // In the app bundle, or SwiftPM's resource bundle with `swift run`
+        guard let url = Bundle.main.url(forResource: "english", withExtension: "dict")
+                ?? Bundle.module.url(forResource: "english", withExtension: "dict"),
+              let packed = try? Data(contentsOf: url),
+              let data = try? (packed as NSData).decompressed(using: .zlib) as Data,
+              let text = String(data: data, encoding: .utf8) else { return [:] }
+        var table: [String: String] = [:]
+        table.reserveCapacity(120_000)
+        for line in text.split(separator: "\n") {
+            guard let tab = line.firstIndex(of: "\t") else { continue }
+            table[String(line[..<tab])] = String(line[line.index(after: tab)...])
+        }
+        return table
+    }()
+}
+
 /// Voice settings that shape how the text is spoken.
 struct SpeechStyle {
     var speed = 1.0             // 1.0 = voice default
@@ -88,10 +124,9 @@ struct SpeechStyle {
     /// Asides in parentheses read lower and quicker, the pitch drifts down along a paragraph,
     /// and longer sentences are followed by a longer breath.
     var naturalIntonation = true
-    /// Finds English words in a text of another language and reads them with an English voice.
-    var detectEnglish = false
-    /// The voice for a language code ("en", "fr-FR"…) used by {en: …} spans and detected English words;
-    /// nil = no voice for that language, the main voice reads it.
+    var english = EnglishWords.mainVoice
+    /// The voice for a language code ("en", "fr-FR"…) used by {fr: …} spans and, with `.voice`, English
+    /// words; nil = no voice for that language, the main voice reads it.
     var voiceForLanguage: (String) -> String? = { _ in nil }
 
     /// "find = replace" lines; blank lines and lines starting with # are ignored.
@@ -164,7 +199,8 @@ enum SSMLBuilder {
         text = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         if style.stripEmoji { text = stripEmoji(text) }
         text = outsideLanguageSpans(text) { applyPronunciations($0, style.pronunciations) }
-        if style.detectEnglish, !style.language.hasPrefix("en"), style.voiceForLanguage("en") != nil {
+        if !style.language.hasPrefix("en"),
+           style.english == .guide || (style.english == .voice && style.voiceForLanguage("en") != nil) {
             let english = languages.firstIndex(of: "en") ?? languages.count
             if english == languages.count { languages.append("en") }
             let detector = EnglishDetector(mainLanguage: style.language)
@@ -187,6 +223,8 @@ enum SSMLBuilder {
         var voice: String?  // nil = main voice
         var inEmphasis = false
         var inAside = false
+        /// In an English span read by the main voice with the pronunciation guide
+        var inGuide = false
 
         /// A change of voice ends the utterance; the next one follows without a gap.
         func setVoice(_ new: String?) {
@@ -233,7 +271,7 @@ enum SSMLBuilder {
                 var r = rate, p = pitch
                 if inEmphasis { r *= 0.93; p += 6 }
                 if inAside { r *= 1.05; p -= 4 }
-                body += prosody(segment, rate: r, pitch: p, louder: inEmphasis)
+                body += prosody(inGuide ? guided(segment) : escape(segment), rate: r, pitch: p, louder: inEmphasis)
                 hasSpeech = true
             }
             for ch in sentence {
@@ -248,10 +286,12 @@ enum SSMLBuilder {
                     flushPause()
                     let language = languages[safe: index] ?? ""
                     let isMain = language.isEmpty || language.prefix(2) == style.language.prefix(2)
-                    setVoice(isMain ? nil : style.voiceForLanguage(language))
+                    inGuide = !isMain && language.lowercased().hasPrefix("en") && style.english != .voice
+                    setVoice(isMain || inGuide ? nil : style.voiceForLanguage(language))
                 } else if ch == languageClose {
                     flush()
                     flushPause()
+                    inGuide = false
                     setVoice(nil)
                 } else if style.naturalIntonation, ch == "(" {
                     flush()
@@ -340,12 +380,37 @@ enum SSMLBuilder {
         return text
     }
 
-    private static func prosody(_ text: String, rate: Double, pitch: Double, louder: Bool) -> String {
+    /// English text for the main voice: every word in the dictionary gets its pronunciation.
+    private static func guided(_ text: String) -> String {
+        var result = "", word = ""
+        func flushWord() {
+            defer { word = "" }
+            guard !word.isEmpty else { return }
+            if let ipa = EnglishPronunciation.ipa(for: word) {
+                result += "<phoneme alphabet=\"ipa\" ph=\"\(ipa)\">\(escape(word))</phoneme>"
+            } else {
+                result += escape(word)
+            }
+        }
+        for ch in text {
+            if ch.isLetter {
+                word.append(ch)
+            } else {
+                flushWord()
+                result += escape(String(ch))
+            }
+        }
+        flushWord()
+        return result
+    }
+
+    /// `xml` is the escaped text of the segment.
+    private static func prosody(_ xml: String, rate: Double, pitch: Double, louder: Bool) -> String {
         let p = pitch.rounded()
         let pitchStr = String(format: "%+.0f%%", p == 0 ? 0 : p)  // avoid "-0%"
         let volume = louder ? " volume=\"+3dB\"" : ""
         return "<prosody rate=\"\(Int((rate * 100).rounded()))%\" pitch=\"\(pitchStr)\"\(volume)>"
-            + escape(text) + "</prosody>"
+            + xml + "</prosody>"
     }
 
     private static func jitter(_ percent: Double) -> Double {

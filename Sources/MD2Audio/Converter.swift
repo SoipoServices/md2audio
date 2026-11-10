@@ -51,7 +51,7 @@ final class Converter: ObservableObject {
                 try await convert(markdown, to: output, format: format, voiceID: voiceID,
                                   style: style, pauseScale: pauseScale) { i, n in
                     progress = Double(i - 1) / Double(n)
-                    status = "Part \(i) of \(n)"
+                    status = "Speaking part \(i) of \(n)"
                 }
                 progress = 1
                 status = "Done"
@@ -75,7 +75,7 @@ final class Converter: ObservableObject {
     /// A failing file is marked and the batch goes on with the next one.
     func runBatch(folder: URL?, format: OutputFormat, voiceID: String, style: SpeechStyle, pauseScale: Double) {
         guard !queue.isEmpty, start() else { return }
-        for i in queue.indices { queue[i].state = .pending }
+        for i in queue.indices { queue[i].reset() }
         Task {
             var used = Set<String>()
             let count = queue.count
@@ -87,12 +87,16 @@ final class Converter: ObservableObject {
                 let source = queue[i].source
                 let output = Batch.outputURL(for: source, folder: folder, ext: format.fileExtension, used: &used)
                 queue[i].state = .running
+                queue[i].activity = "Reading the text…"
+                status = "File \(i + 1) of \(count) · \(source.lastPathComponent)"
+                progress = Double(i) / Double(count)
                 do {
                     let markdown = try TextFile.read(source)
                     try await convert(markdown, to: output, format: format, voiceID: voiceID,
                                       style: style, pauseScale: pauseScale) { b, n in
-                        progress = (Double(i) + Double(b - 1) / Double(n)) / Double(count)
-                        status = "File \(i + 1) of \(count) · \(source.lastPathComponent) · part \(b) of \(n)"
+                        queue[i].progress = Double(b - 1) / Double(n)
+                        queue[i].activity = "Speaking part \(b) of \(n) → \(output.lastPathComponent)"
+                        progress = (Double(i) + queue[i].progress) / Double(count)
                     }
                     queue[i].state = .done(output)
                 } catch is CancellationError {
@@ -118,7 +122,7 @@ final class Converter: ObservableObject {
         progress = 0
         resultURL = nil
         errorMessage = nil
-        status = "Preparing…"
+        status = "Preparing the text…"
         return true
     }
 

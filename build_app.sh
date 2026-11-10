@@ -1,4 +1,4 @@
-i w#!/bin/sh
+#!/bin/sh
 # Builds MD2Audio.app (Universal: Apple Silicon + Intel) and packages it for sharing.
 #
 #   ./build_app.sh                      # build/MD2Audio.app + dist/MD2Audio-<version>.dmg/.zip
@@ -26,7 +26,7 @@ echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/MD2Audio"
-cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+cp Resources/AppIcon.icns Sources/MD2Audio/Resources/english.dict "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

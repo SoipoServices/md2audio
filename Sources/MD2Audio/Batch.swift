@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// One file in a batch conversion, with its progress.
 struct BatchItem: Identifiable, Equatable {
@@ -10,6 +11,16 @@ struct BatchItem: Identifiable, Equatable {
     let id = UUID()
     let source: URL
     var state: State = .pending
+    /// 0...1 while the file is being processed.
+    var progress = 0.0
+    /// What is being done to the file right now.
+    var activity = ""
+
+    mutating func reset() {
+        state = .pending
+        progress = 0
+        activity = ""
+    }
 }
 
 enum Batch {
@@ -51,45 +62,69 @@ enum Batch {
     }
 }
 
-/// The list of queued files, with per-file status.
+/// The list of queued files: each one with its own progress bar and what is being done to it.
 struct BatchListView: View {
     @Binding var queue: [BatchItem]
     let isRunning: Bool
+    /// Accepts more files dropped on the list.
+    var onDrop: (types: [UTType], add: ([URL]) -> Void)?
 
     var body: some View {
-        List {
-            ForEach(queue) { item in
-                HStack(spacing: 8) {
-                    icon(for: item.state).frame(width: 18)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.source.lastPathComponent).lineLimit(1)
-                        Text(detail(for: item))
-                            .font(.caption).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.middle)
-                    }
-                    Spacer()
-                    if case .done(let url) = item.state {
-                        Button("Show in Finder", systemImage: "magnifyingglass") {
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
-                        }
-                        .labelStyle(.iconOnly).buttonStyle(.borderless)
-                    }
-                    if !isRunning {
-                        Button("Remove", systemImage: "minus.circle") {
-                            queue.removeAll { $0.id == item.id }
-                        }
-                        .labelStyle(.iconOnly).buttonStyle(.borderless)
-                    }
+        ScrollViewReader { proxy in
+            List {
+                ForEach(queue) { item in
+                    row(item).id(item.id)
                 }
             }
+            .listStyle(.bordered(alternatesRowBackgrounds: true))
+            // Follows the file being processed
+            .onChange(of: queue.first { $0.state == .running }?.id) { _, id in
+                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+            }
         }
-        .listStyle(.bordered(alternatesRowBackgrounds: true))
+        .fileDrop(types: isRunning ? [] : onDrop?.types ?? []) { onDrop?.add($0) }
+    }
+
+    private func row(_ item: BatchItem) -> some View {
+        HStack(spacing: 8) {
+            icon(for: item.state).frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.source.lastPathComponent).lineLimit(1)
+                if item.state == .running {
+                    ProgressView(value: min(max(item.progress, 0), 1))
+                    HStack {
+                        Text(item.activity).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Text("\(Int(item.progress * 100))%").monospacedDigit()
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text(detail(for: item))
+                        .font(.caption).foregroundStyle(detailColor(for: item.state))
+                        .lineLimit(1).truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 0)
+            if case .done(let url) = item.state {
+                Button("Show in Finder", systemImage: "magnifyingglass") {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+                .labelStyle(.iconOnly).buttonStyle(.borderless)
+            }
+            if !isRunning {
+                Button("Remove", systemImage: "minus.circle") {
+                    queue.removeAll { $0.id == item.id }
+                }
+                .labelStyle(.iconOnly).buttonStyle(.borderless)
+            }
+        }
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder private func icon(for state: BatchItem.State) -> some View {
         switch state {
-        case .pending: Image(systemName: "circle").foregroundStyle(.tertiary)
-        case .running: ProgressView().controlSize(.small)
+        case .pending: Image(systemName: isRunning ? "clock" : "circle").foregroundStyle(.tertiary)
+        case .running: Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(Color.accentColor)
         case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         case .cancelled: Image(systemName: "xmark.circle").foregroundStyle(.secondary)
@@ -98,10 +133,15 @@ struct BatchListView: View {
 
     private func detail(for item: BatchItem) -> String {
         switch item.state {
-        case .done(let url): "→ \(url.lastPathComponent)"
-        case .failed(let message): message
+        case .pending: isRunning ? "Waiting…" : item.source.deletingLastPathComponent().path
+        case .running: item.activity
+        case .done(let url): "Done → \(url.lastPathComponent)"
+        case .failed(let message): "Failed: \(message)"
         case .cancelled: "Cancelled"
-        default: item.source.deletingLastPathComponent().path
         }
+    }
+
+    private func detailColor(for state: BatchItem.State) -> Color {
+        if case .failed = state { .orange } else { .secondary }
     }
 }

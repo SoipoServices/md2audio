@@ -70,7 +70,7 @@ final class Transcriber: ObservableObject {
     /// A failing file is marked and the batch goes on with the next one.
     func runBatch(locale: Locale, format: TranscriptFormat, timestamps: Bool, folder: URL?) {
         guard !queue.isEmpty, start() else { return }
-        for i in queue.indices { queue[i].state = .pending }
+        for i in queue.indices { queue[i].reset() }
         task = Task {
             var used = Set<String>()
             let count = queue.count
@@ -81,14 +81,18 @@ final class Transcriber: ObservableObject {
                 }
                 let source = queue[i].source
                 queue[i].state = .running
+                status = "File \(i + 1) of \(count) · \(source.lastPathComponent)"
+                progress = Double(i) / Double(count)
                 do {
                     try await transcribe(source, locale: locale) { fileStatus in
-                        self.status = "File \(i + 1) of \(count) · \(source.lastPathComponent) · \(fileStatus)"
+                        self.queue[i].activity = fileStatus
                     } progress: { fileProgress in
+                        self.queue[i].progress = fileProgress
                         self.progress = (Double(i) + fileProgress) / Double(count)
                     }
                     guard !segments.isEmpty else { throw TranscriptionError.noSpeech }
                     let output = Batch.outputURL(for: source, folder: folder, ext: format.fileExtension, used: &used)
+                    queue[i].activity = "Saving \(output.lastPathComponent)…"
                     let text = TranscriptFormatter.render(segments, format: format, timestamps: timestamps,
                                                           title: source.deletingPathExtension().lastPathComponent)
                     try text.write(to: output, atomically: true, encoding: .utf8)
@@ -122,7 +126,7 @@ final class Transcriber: ObservableObject {
     private func transcribe(_ url: URL, locale: Locale, status report: @escaping (String) -> Void,
                             progress onProgress: ((Double) -> Void)? = nil) async throws -> Double {
         segments = []
-        report("Opening \(url.lastPathComponent)…")
+        report("Opening the audio…")
         let file = try AVAudioFile(forReading: url)
         let duration = Double(file.length) / file.processingFormat.sampleRate
         let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [],
@@ -138,14 +142,14 @@ final class Transcriber: ObservableObject {
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         self.analyzer = analyzer
         defer { self.analyzer = nil }
-        report("Transcribing…")
+        report("Starting the transcription…")
         let collector = Task {
             for try await result in transcriber.results {
                 let segment = Self.segment(from: result)
                 segments.append(segment)
                 let fraction = duration > 0 ? min(segment.end / duration, 1) : 0
                 if let onProgress { onProgress(fraction) } else { progress = fraction }
-                report("Transcribing… \(Self.clock(segment.end)) of \(Self.clock(duration))")
+                report("Transcribing \(Self.clock(segment.end)) of \(Self.clock(duration))")
             }
         }
         try await analyzer.start(inputAudioFile: file, finishAfterFile: true)

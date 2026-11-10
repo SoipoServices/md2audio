@@ -67,7 +67,8 @@ struct TranscribeView: View {
             actionBar
 
             if isBatch {
-                BatchListView(queue: $transcriber.queue, isRunning: transcriber.isRunning)
+                BatchListView(queue: $transcriber.queue, isRunning: transcriber.isRunning,
+                              onDrop: ([.audio], addInput))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .frame(minHeight: 160)
                 HStack {

@@ -5,6 +5,7 @@ let package = Package(
     name: "MD2Audio",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "MD2Audio", path: "Sources/MD2Audio")
+        .executableTarget(name: "MD2Audio", path: "Sources/MD2Audio",
+                          resources: [.copy("Resources/english.dict")])
     ]
 )
