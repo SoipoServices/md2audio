@@ -45,40 +45,10 @@ final class Transcriber: ObservableObject {
     }
 
     func run(url: URL, locale: Locale) {
-        guard !isRunning else { return }
-        isRunning = true
-        progress = 0
-        segments = []
-        errorMessage = nil
-        status = "Opening \(url.lastPathComponent)…"
-
+        guard start() else { return }
         task = Task {
             do {
-                let file = try AVAudioFile(forReading: url)
-                let duration = Double(file.length) / file.processingFormat.sampleRate
-                let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [],
-                                                    reportingOptions: [], attributeOptions: [.audioTimeRange])
-
-                // The language model is downloaded once, on first use
-                if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-                    status = "Downloading the \(Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier) speech model…"
-                    try await request.downloadAndInstall()
-                }
-                try Task.checkCancellation()
-
-                let analyzer = SpeechAnalyzer(modules: [transcriber])
-                self.analyzer = analyzer
-                status = "Transcribing…"
-                let collector = Task {
-                    for try await result in transcriber.results {
-                        let segment = Self.segment(from: result)
-                        segments.append(segment)
-                        if duration > 0 { progress = min(segment.end / duration, 1) }
-                        status = "Transcribing… \(Self.clock(segment.end)) of \(Self.clock(duration))"
-                    }
-                }
-                try await analyzer.start(inputAudioFile: file, finishAfterFile: true)
-                try await collector.value
+                let duration = try await transcribe(url, locale: locale) { self.status = $0 }
                 progress = 1
                 status = segments.isEmpty ? "No speech found" : "Done: \(Self.clock(duration)) of audio"
             } catch is CancellationError {
@@ -88,8 +58,100 @@ final class Transcriber: ObservableObject {
                 errorMessage = error.localizedDescription
             }
             isRunning = false
-            analyzer = nil
         }
+    }
+
+    // MARK: Batch
+
+    /// Audio files queued for a batch transcription, with their status.
+    @Published var queue: [BatchItem] = []
+
+    /// Transcribes every queued file and saves each transcript in `folder` (or next to its audio).
+    /// A failing file is marked and the batch goes on with the next one.
+    func runBatch(locale: Locale, format: TranscriptFormat, timestamps: Bool, folder: URL?) {
+        guard !queue.isEmpty, start() else { return }
+        for i in queue.indices { queue[i].state = .pending }
+        task = Task {
+            var used = Set<String>()
+            let count = queue.count
+            for i in queue.indices {
+                if Task.isCancelled {
+                    queue[i].state = .cancelled
+                    continue
+                }
+                let source = queue[i].source
+                queue[i].state = .running
+                do {
+                    try await transcribe(source, locale: locale) { fileStatus in
+                        self.status = "File \(i + 1) of \(count) · \(source.lastPathComponent) · \(fileStatus)"
+                    } progress: { fileProgress in
+                        self.progress = (Double(i) + fileProgress) / Double(count)
+                    }
+                    guard !segments.isEmpty else { throw TranscriptionError.noSpeech }
+                    let output = Batch.outputURL(for: source, folder: folder, ext: format.fileExtension, used: &used)
+                    let text = TranscriptFormatter.render(segments, format: format, timestamps: timestamps,
+                                                          title: source.deletingPathExtension().lastPathComponent)
+                    try text.write(to: output, atomically: true, encoding: .utf8)
+                    queue[i].state = .done(output)
+                } catch is CancellationError {
+                    queue[i].state = .cancelled
+                } catch {
+                    queue[i].state = .failed(error.localizedDescription)
+                }
+            }
+            progress = 1
+            status = Task.isCancelled ? "Cancelled" : Batch.summary(queue)
+            segments = []
+            isRunning = false
+        }
+    }
+
+    // MARK: Shared
+
+    private func start() -> Bool {
+        guard !isRunning else { return false }
+        isRunning = true
+        progress = 0
+        segments = []
+        errorMessage = nil
+        return true
+    }
+
+    /// Transcribes one file into `segments`; returns the audio duration in seconds.
+    @discardableResult
+    private func transcribe(_ url: URL, locale: Locale, status report: @escaping (String) -> Void,
+                            progress onProgress: ((Double) -> Void)? = nil) async throws -> Double {
+        segments = []
+        report("Opening \(url.lastPathComponent)…")
+        let file = try AVAudioFile(forReading: url)
+        let duration = Double(file.length) / file.processingFormat.sampleRate
+        let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [],
+                                            reportingOptions: [], attributeOptions: [.audioTimeRange])
+
+        // The language model is downloaded once, on first use
+        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            report("Downloading the \(Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier) speech model…")
+            try await request.downloadAndInstall()
+        }
+        try Task.checkCancellation()
+
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        self.analyzer = analyzer
+        defer { self.analyzer = nil }
+        report("Transcribing…")
+        let collector = Task {
+            for try await result in transcriber.results {
+                let segment = Self.segment(from: result)
+                segments.append(segment)
+                let fraction = duration > 0 ? min(segment.end / duration, 1) : 0
+                if let onProgress { onProgress(fraction) } else { progress = fraction }
+                report("Transcribing… \(Self.clock(segment.end)) of \(Self.clock(duration))")
+            }
+        }
+        try await analyzer.start(inputAudioFile: file, finishAfterFile: true)
+        try await collector.value
+        try Task.checkCancellation()
+        return duration
     }
 
     func cancel() {
@@ -115,6 +177,11 @@ final class Transcriber: ObservableObject {
             ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
             : String(format: "%d:%02d", s / 60, s % 60)
     }
+}
+
+enum TranscriptionError: LocalizedError {
+    case noSpeech
+    var errorDescription: String? { "No speech found" }
 }
 
 /// Turns transcript segments into text, Markdown or SRT subtitles.

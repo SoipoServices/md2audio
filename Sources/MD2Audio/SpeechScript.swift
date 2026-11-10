@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import NaturalLanguage
 
 /// A readable block of the Markdown document.
@@ -85,6 +85,14 @@ struct SpeechStyle {
     var stripEmoji = true
     var pronunciations: [(find: String, replace: String)] = []
     var language = "it-IT"
+    /// Asides in parentheses read lower and quicker, the pitch drifts down along a paragraph,
+    /// and longer sentences are followed by a longer breath.
+    var naturalIntonation = true
+    /// Finds English words in a text of another language and reads them with an English voice.
+    var detectEnglish = false
+    /// The voice for a language code ("en", "fr-FR"…) used by {en: …} spans and detected English words;
+    /// nil = no voice for that language, the main voice reads it.
+    var voiceForLanguage: (String) -> String? = { _ in nil }
 
     /// "find = replace" lines; blank lines and lines starting with # are ignored.
     static func parsePronunciations(_ text: String) -> [(find: String, replace: String)] {
@@ -98,8 +106,22 @@ struct SpeechStyle {
     }
 }
 
+/// One utterance for the synthesizer.
+struct SpeechItem {
+    var ssml: String
+    /// Seconds of silence after it.
+    var pause = 0.0
+    /// Voice identifier; nil = the main voice.
+    var voiceID: String?
+    /// The next item continues the same sentence (another voice): no gap in between.
+    var joined = false
+}
+
 /// Builds SSML for a block. Apple voices honor <break> and absolute <prosody rate/pitch/volume>
-/// (nested prosody does not combine and <emphasis> is ignored), so every segment gets its own values.
+/// (nested prosody does not combine; <emphasis>, <sub> and <voice> are ignored and <lang> cuts the
+/// utterance short), so every segment gets its own values and a span in another language becomes
+/// an utterance of its own, spoken by a voice of that language.
+@MainActor
 enum SSMLBuilder {
     private static let emphasisOpen: Character = "\u{E000}"
     private static let emphasisClose: Character = "\u{E001}"
@@ -107,38 +129,94 @@ enum SSMLBuilder {
     private static let pauseMark: Character = "\u{E002}"
     /// A trailing-thought pause after an ellipsis, always 500 ms.
     private static let ellipsisMark: Character = "\u{E003}"
-    private static let markers: Set<Character> = [emphasisOpen, emphasisClose, pauseMark, ellipsisMark]
+    /// End of a language span. A span starts with U+E100 + the index of its language.
+    private static let languageClose: Character = "\u{E006}"
     private static let sentenceEnd: Set<Character> = [".", "!", "?", ":", ";", "…"]
 
-    static func ssml(for block: Block, style: SpeechStyle) -> String? {
+    private static func languageOpen(_ index: Int) -> Character {
+        Character(Unicode.Scalar(UInt32(0xE100 + index))!)
+    }
+
+    private static func languageIndex(_ ch: Character) -> Int? {
+        guard let v = ch.unicodeScalars.first?.value, (0xE100..<0xE200).contains(v) else { return nil }
+        return Int(v - 0xE100)
+    }
+
+    private static func isMarker(_ ch: Character) -> Bool {
+        guard let v = ch.unicodeScalars.first?.value else { return false }
+        return (0xE000..<0xE200).contains(v)
+    }
+
+    /// The utterances for a block: one, or several when it has spans in other languages.
+    /// Empty when there is nothing to read.
+    static func items(for block: Block, style: SpeechStyle) -> [SpeechItem] {
         var text = block.segments.map { seg in
             style.emphasis && seg.emphasized
                 ? "\(emphasisOpen)\(seg.text)\(emphasisClose)" : seg.text
         }.joined()
+        // Index 0 = the main language, kept as it is (no detection)
+        var languages = [""]
+        text = shortenURLs(text)
+        text = markLanguageSpans(text, &languages)
         text = text.replacingOccurrences(of: #"(\.\.\.|…)(?!\.)"#, with: "…" + String(ellipsisMark),
                                          options: .regularExpression)
         if style.punctuationPauseMs > 0 { text = markPauses(text) }
         text = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         if style.stripEmoji { text = stripEmoji(text) }
-        text = applyPronunciations(text, style.pronunciations)
-        guard text.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
+        text = outsideLanguageSpans(text) { applyPronunciations($0, style.pronunciations) }
+        if style.detectEnglish, !style.language.hasPrefix("en"), style.voiceForLanguage("en") != nil {
+            let english = languages.firstIndex(of: "en") ?? languages.count
+            if english == languages.count { languages.append("en") }
+            let detector = EnglishDetector(mainLanguage: style.language)
+            text = outsideLanguageSpans(text) {
+                detector.mark($0, open: languageOpen(english), close: languageClose)
+            }
+        }
+        guard text.contains(where: { $0.isLetter || $0.isNumber }) else { return [] }
         // A closing punctuation mark gives a proper falling intonation
-        if let last = text.last(where: { !markers.contains($0) && !$0.isWhitespace }),
-           !sentenceEnd.contains(last) {
+        if let last = text.last(where: { !isMarker($0) && !$0.isWhitespace }), !sentenceEnd.contains(last) {
             text += "."
         }
+        // Punctuation right after a span belongs to it, so that voice gets the intonation
+        text = text.replacingOccurrences(of: "\(languageClose)([.,;:!?…]+)(?![\\p{L}\\p{N}])",
+                                         with: "$1\(languageClose)", options: .regularExpression)
 
+        var items: [SpeechItem] = []
         var body = ""
+        var hasSpeech = false
+        var voice: String?  // nil = main voice
         var inEmphasis = false
-        for (i, sentence) in sentences(text, language: style.language).enumerated() {
+        var inAside = false
+
+        /// A change of voice ends the utterance; the next one follows without a gap.
+        func setVoice(_ new: String?) {
+            guard new != voice else { return }
+            if hasSpeech {
+                items.append(SpeechItem(ssml: "<speak>\(body)</speak>", voiceID: voice, joined: true))
+                body = ""
+                hasSpeech = false
+            }
+            voice = new
+        }
+
+        let sentences = sentences(text, language: style.language)
+        for (i, sentence) in sentences.enumerated() {
             if i > 0 && style.sentencePauseMs > 0 {
-                body += "<break time=\"\(Int(style.sentencePauseMs))ms\"/>"
+                // A longer sentence is followed by a longer breath
+                let words = Double(sentences[i - 1].split(separator: " ").count)
+                let breath = style.naturalIntonation ? min(max(0.8 + words / 40, 0.8), 1.4) : 1
+                body += "<break time=\"\(Int(style.sentencePauseMs * breath))ms\"/>"
             }
             var rate = style.speed * (1 + jitter(style.variation))
             var pitch = style.pitch + jitter(style.variation) * 100
             if block.isHeading && style.headingStyle {
                 rate *= 0.92
                 pitch -= 4
+            }
+            if style.naturalIntonation, sentences.count > 1 {
+                // The pitch drifts down along the paragraph and the last sentence slows down a little
+                pitch += 2 - 4 * Double(i) / Double(sentences.count - 1)
+                if i == sentences.count - 1 { rate *= 0.98 }
             }
             var segment = ""
             var pauseMs = 0.0
@@ -152,8 +230,11 @@ enum SSMLBuilder {
                 guard segment.contains(where: { !$0.isWhitespace }) else { return }
                 // Punctuation alone needs no prosody of its own
                 guard segment.contains(where: { $0.isLetter || $0.isNumber }) else { return body += escape(segment) }
-                body += prosody(segment, rate: inEmphasis ? rate * 0.93 : rate,
-                                pitch: inEmphasis ? pitch + 6 : pitch, louder: inEmphasis)
+                var r = rate, p = pitch
+                if inEmphasis { r *= 0.93; p += 6 }
+                if inAside { r *= 1.05; p -= 4 }
+                body += prosody(segment, rate: r, pitch: p, louder: inEmphasis)
+                hasSpeech = true
             }
             for ch in sentence {
                 if ch == pauseMark || ch == ellipsisMark {
@@ -162,6 +243,26 @@ enum SSMLBuilder {
                 } else if ch == emphasisOpen || ch == emphasisClose {
                     flush()
                     inEmphasis = ch == emphasisOpen
+                } else if let index = languageIndex(ch) {
+                    flush()
+                    flushPause()
+                    let language = languages[safe: index] ?? ""
+                    let isMain = language.isEmpty || language.prefix(2) == style.language.prefix(2)
+                    setVoice(isMain ? nil : style.voiceForLanguage(language))
+                } else if ch == languageClose {
+                    flush()
+                    flushPause()
+                    setVoice(nil)
+                } else if style.naturalIntonation, ch == "(" {
+                    flush()
+                    pauseMs += style.punctuationPauseMs
+                    inAside = true
+                    segment.append(ch)
+                } else if inAside, ch == ")" {
+                    segment.append(ch)
+                    flush()
+                    inAside = false
+                    pauseMs += style.punctuationPauseMs
                 } else {
                     if !ch.isWhitespace { flushPause() }  // adjacent pauses add up
                     segment.append(ch)
@@ -170,7 +271,52 @@ enum SSMLBuilder {
             flush()
             flushPause()
         }
-        return "<speak>\(body)</speak>"
+        if hasSpeech {
+            items.append(SpeechItem(ssml: "<speak>\(body)</speak>", voiceID: voice))
+        } else if !items.isEmpty {
+            items[items.count - 1].joined = false
+        }
+        return items
+    }
+
+    /// `{en: machine learning}` -> a span read by a voice of that language.
+    /// `{it: …}` with the main language keeps the words in the main voice.
+    private static func markLanguageSpans(_ text: String, _ languages: inout [String]) -> String {
+        guard let re = try? NSRegularExpression(pattern: #"\{([A-Za-z]{2,3}(?:-[A-Za-z]{2})?):\s*([^{}]+)\}"#) else {
+            return text
+        }
+        var result = text
+        for match in re.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+            guard let whole = Range(match.range, in: result), let code = Range(match.range(at: 1), in: result),
+                  let content = Range(match.range(at: 2), in: result) else { continue }
+            let language = String(result[code])
+            let index = languages.firstIndex(of: language) ?? languages.count
+            if index == languages.count { languages.append(language) }
+            result.replaceSubrange(whole, with: "\(languageOpen(index))\(result[content])\(languageClose)")
+        }
+        return result
+    }
+
+    /// Applies `transform` to the text that is not inside a language span.
+    private static func outsideLanguageSpans(_ text: String, _ transform: (String) -> String) -> String {
+        var result = "", outside = "", inSpan = false
+        for ch in text {
+            if !inSpan, languageIndex(ch) != nil {
+                result += transform(outside)
+                outside = ""
+                inSpan = true
+            }
+            if inSpan { result.append(ch) } else { outside.append(ch) }
+            if ch == languageClose { inSpan = false }
+        }
+        return result + transform(outside)
+    }
+
+    /// A bare web address is read as its site name only, by the main voice:
+    /// https://www.example.com/a?b=c -> example.com
+    private static func shortenURLs(_ text: String) -> String {
+        text.replacingOccurrences(of: #"https?://(?:www\.)?([^\s/?#]+[^\s/?#.,;:!)])\S*?(?=[.,;:!?)]*(?:\s|$))"#,
+                                  with: "\(languageOpen(0))$1\(languageClose)", options: .regularExpression)
     }
 
     /// Pauses inside a sentence: commas (1 unit), ; and : (2), spaced or em dashes (2, read as a comma
@@ -230,13 +376,15 @@ enum SSMLBuilder {
             .replacingOccurrences(of: #" ([.,;:!?…])"#, with: "$1", options: .regularExpression)
     }
 
+    /// The replacement is marked as main language, so it is not taken for an English word.
     private static func applyPronunciations(_ text: String, _ rules: [(find: String, replace: String)]) -> String {
         rules.reduce(text) { text, rule in
             let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: rule.find)
                 + "(?![\\p{L}\\p{N}])"
             guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return text }
             return re.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text),
-                                               withTemplate: NSRegularExpression.escapedTemplate(for: rule.replace))
+                                               withTemplate: NSRegularExpression.escapedTemplate(
+                                                   for: "\(languageOpen(0))\(rule.replace)\(languageClose)"))
         }
     }
 
@@ -246,6 +394,108 @@ enum SSMLBuilder {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&apos;")
+    }
+}
+
+/// Finds English words and phrases in a text of another language.
+/// A word starts a span when it is clearly English: an English dictionary word that either is not in the
+/// main language's dictionary or looks very English. Neighbours that look English enough join the span,
+/// so "machine learning" or "state of the art" are read in one go. Words the main language shares with
+/// English ("come", "more", "computer") stay in the main voice unless they are next to English words.
+@MainActor
+struct EnglishDetector {
+    private struct Word { var isSeed = false, canJoin = false, canBridge = false }
+
+    private static var cache: [String: Word] = [:]
+    private static let recognizer = NLLanguageRecognizer()
+    private static let wordPattern = try! NSRegularExpression(pattern: #"\p{L}+"#)
+
+    private let main: NLLanguage
+    /// The main language's spelling dictionary, if installed.
+    private let mainDictionary: String?
+    /// Italian, Spanish and Portuguese words end in a vowel, most English loanwords do not.
+    private let nativeWordsEndInVowel: Bool
+
+    init(mainLanguage: String) {
+        let code = String(mainLanguage.prefix(2))
+        main = NLLanguage(code)
+        nativeWordsEndInVowel = ["it", "es", "pt"].contains(code)
+        let available = NSSpellChecker.shared.availableLanguages
+        mainDictionary = available.first { $0 == code } ?? available.first { $0.hasPrefix(code) }
+    }
+
+    func mark(_ text: String, open: Character, close: Character) -> String {
+        let ns = text as NSString
+        let tokens = Self.wordPattern.matches(in: text, range: NSRange(location: 0, length: ns.length)).map(\.range)
+        guard !tokens.isEmpty else { return text }
+        let words = tokens.map { classify(ns.substring(with: $0)) }
+        /// Only spaces, hyphens or emphasis marks between two tokens
+        func adjacent(_ i: Int, _ j: Int) -> Bool {
+            let gap = ns.substring(with: NSRange(location: NSMaxRange(tokens[i]),
+                                                 length: tokens[j].location - NSMaxRange(tokens[i])))
+            return !gap.isEmpty && gap.allSatisfy { $0 == " " || $0 == "-" || $0 == "\u{E000}" || $0 == "\u{E001}" }
+        }
+
+        var english = words.map(\.isSeed)
+        guard english.contains(true) else { return text }
+        var changed = true
+        while changed {
+            changed = false
+            for i in words.indices where !english[i] {
+                let before = i > 0 && english[i - 1] && adjacent(i - 1, i)
+                let after = i + 1 < words.count && english[i + 1] && adjacent(i, i + 1)
+                if (words[i].canJoin && (before || after)) || (words[i].canBridge && before && after) {
+                    english[i] = true
+                    changed = true
+                }
+            }
+        }
+
+        let result = NSMutableString(string: text)
+        for i in words.indices.reversed() where english[i] {
+            let endsSpan = !(i + 1 < words.count && english[i + 1] && adjacent(i, i + 1))
+            let startsSpan = !(i > 0 && english[i - 1] && adjacent(i - 1, i))
+            if endsSpan { result.insert(String(close), at: NSMaxRange(tokens[i])) }
+            guard startsSpan else { continue }
+            // An elided article goes with its word: "l'update", "dell'app"
+            let elided = i > 0 && NSMaxRange(tokens[i - 1]) + 1 == tokens[i].location
+                && "'’".contains(ns.substring(with: NSRange(location: tokens[i].location - 1, length: 1)))
+            result.insert(String(open), at: tokens[elided ? i - 1 : i].location)
+        }
+        return result as String
+    }
+
+    private func classify(_ word: String) -> Word {
+        let key = "\(main.rawValue) \(word)"
+        if let cached = Self.cache[key] { return cached }
+        var result = Word()
+        defer { Self.cache[key] = result }
+        // Acronyms (API, USA) are left to the main voice
+        guard word.count >= 2, !(word.count <= 5 && word == word.uppercased()) else { return result }
+
+        let recognizer = Self.recognizer
+        recognizer.reset()
+        recognizer.languageConstraints = [main, .english]
+        recognizer.processString(word)
+        let score = recognizer.languageHypotheses(withMaximum: 2)[.english] ?? 0
+        guard score >= 0.3, isSpelled(word, in: "en") else { return result }
+
+        // With no dictionary for the main language, every word may belong to it
+        let inMain = mainDictionary.map { isSpelled(word, in: $0) } ?? true
+        let looksNative = inMain && nativeWordsEndInVowel && "aeiouàèéìòù".contains(word.lowercased().last ?? " ")
+        result.canBridge = score >= 0.4                                    // "work in progress"
+        result.canJoin = word.count >= 3 && score >= (looksNative ? 0.6 : 0.35)  // "smart" next to "working"
+        if word.count >= 3 {
+            result.isSeed = !inMain ? score >= 0.5 : score >= 0.9 && !looksNative
+        } else {
+            result.isSeed = score >= 0.95 && !looksNative                  // "of"
+        }
+        return result
+    }
+
+    private func isSpelled(_ word: String, in language: String) -> Bool {
+        NSSpellChecker.shared.checkSpelling(of: word, startingAt: 0, language: language, wrap: false,
+                                            inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
     }
 }
 

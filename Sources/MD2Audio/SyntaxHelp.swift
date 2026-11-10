@@ -21,7 +21,11 @@ struct SyntaxHelp: View {
             ("; and :", unit > 0 ? "\(unit * 2) ms pause" : "Normal punctuation"),
             ("word - word  –  —", unit > 0 ? "\(unit * 2) ms pause, never read as \"minus\"" : "Read as a comma"),
             ("extra   spaces", unit > 0 ? "\(unit) ms per extra space (up to 6)" : "Ignored"),
+            ("( aside )", "With Natural intonation: read a little lower and quicker, with a short pause around it"),
+            ("{en: machine learning}", "Read by a voice of that language (en, fr, de-DE…). English is also found automatically"),
+            ("{it: come}", "With the text's own language: kept in the main voice, never read as English"),
             ("[text](link)", "Only the text is read"),
+            ("https://www.example.com/page", "Read as example.com"),
             ("`code`, code blocks, images, tables", "Skipped"),
         ]
     }

@@ -17,6 +17,23 @@ The app has two modes, selectable at the top of the window:
 - **Text → Audio**: from Markdown to an audio file (described below);
 - **Audio → Text**: transcription of an audio file (see [Audio to text](#audio-to-text)).
 
+## Batch conversion
+
+Both modes convert many files at once. Select several files in the file picker (⌘-click or ⇧-click),
+drop several files, or drop a **folder** (it is searched, including subfolders, for Markdown/text or
+audio files). The editor is replaced by the list of queued files; drop or click again to add more,
+remove single files with ⊖, and go back to single-file mode with **Clear**.
+
+- **Text → Audio**: every file is read with the current voice and options, and saved as
+  `<name>.m4a`/`.wav`.
+- **Audio → Text**: every file is transcribed in the chosen language and format, and saved as
+  `<name>.md`/`.txt`/`.srt`.
+
+Files are saved next to each source file, or all in one folder chosen with **Choose Folder…**
+(files with the same name get a number, e.g. `README 2.m4a`). Existing files with the same name are
+overwritten. A file that fails is marked in the list and the batch goes on with the next one; finished
+files can be shown in Finder from the list.
+
 ## Options
 
 | Option | Effect |
@@ -26,6 +43,7 @@ The app has two modes, selectable at the top of the window:
 | Pause at commas and dashes | Extra silence within sentences: after commas (1×), after `;` and `:` and at spaced dashes ` - `, `–`, `—` (2×, read as a pause rather than "minus"), and for each extra space between words (1× per space, max 6×). Numbers like `3,5` or `10:30` and words like `e-mail` are left alone. 0 = off |
 | Pause between blocks | Multiplier for the pauses after headings, paragraphs and lists |
 | Variation | Small random change in rate and pitch for each sentence, to make the reading less monotonous |
+| Natural intonation | Asides in parentheses are read a little lower and quicker with a short pause around them, the pitch drifts down along a paragraph and its last sentence slows down slightly, and longer sentences are followed by a longer breath |
 | Read headings slower and lower | Headings are read a little slower and at a lower pitch |
 | Stress bold and italic text | Bold and italic are read slower, at a higher pitch and slightly louder |
 | Skip emoji | Emoji are not read |
@@ -45,6 +63,9 @@ menu, ⌘?):
 | `***` or `---` on a line of its own | Section break: 2 s pause |
 | `...` or `…` | Trailing thought: 500 ms pause |
 | `,` `;` `:` ` - ` `–` `—` and extra spaces | Pauses within the sentence (see *Pause at commas and dashes*) |
+| `( aside )` | With *Natural intonation*: a little lower and quicker, with a short pause around it |
+| `{en: machine learning}` | Read by a voice of that language (see [English and other languages](#english-and-other-languages)) |
+| `https://www.example.com/page` | Read as `example.com` |
 | Code, images, tables | Not read |
 
 The pauses for headings and section breaks are scaled by *Pause between blocks*.
@@ -57,6 +78,32 @@ The voice makes the biggest difference: *Enhanced* and *Premium* voices sound fa
 compact ones. The **Download Voices…** button opens *System Settings › Accessibility › Spoken Content*:
 from there open the *System voice* menu, choose *Manage Voices…* and download the voices you want. The
 app picks them up immediately and lists them first.
+
+## English and other languages
+
+A voice reads every word with the sounds of its own language, so English words in an Italian text
+(or Spanish, French…) come out wrong. With **English words** set to a voice (the default is
+*Automatic*, the best English voice installed), English words and phrases are found automatically and
+read by that voice, in the middle of the sentence: the gap between the two voices is removed and their
+volume is levelled.
+
+A word is taken as English when it is in the English dictionary and either is not a word of the text's
+language (*deployment*, *learning*) or looks unmistakably English (*meeting*, *framework*). Neighbouring
+words that look English join it, so *machine learning*, *smart working* or *state of the art* are read in
+one go. Words the two languages share (*come*, *more*, *computer*, *file*) and acronyms (*API*) stay in
+the main voice.
+
+When the detection gets it wrong, or for other languages, mark the text yourself:
+
+| In the text | Effect |
+|---|---|
+| `{en: know how}` | Read by the English voice |
+| `{fr: déjà vu}`, `{de-DE: Zeitgeist}` | Read by the best installed voice of that language (the main voice if there is none) |
+| `{it: more}` | With the text's own language: kept in the main voice, never read as English |
+
+Words with a rule in *Pronunciations* are never read as English. Choose **Read by the main voice** to
+turn the detection off; the `{en: …}` syntax keeps working. The Preview plays the voices one after the
+other, with a short gap that is not in the converted file.
 
 ## Audio to text
 
@@ -130,13 +177,14 @@ md2audio/
     ├── ContentView.swift      # main window, mode selection
     ├── SpeakView.swift        # Text → Audio: interface and options
     ├── SyntaxHelp.swift       # help on the syntax that changes the reading
-    ├── SpeechScript.swift     # Markdown -> blocks -> SSML (pauses, prosody, emphasis, pronunciations)
+    ├── SpeechScript.swift     # Markdown -> blocks -> SSML (pauses, prosody, emphasis, pronunciations, languages)
     ├── AppleSpeech.swift      # synthesis with AVSpeechSynthesizer, WAV/M4A writing, preview
     ├── Converter.swift        # conversion with progress and cancellation
     ├── PlayerView.swift       # built-in audio player
     ├── TranscribeView.swift   # Audio → Text: interface
     ├── Transcriber.swift      # transcription with SpeechAnalyzer, Text/Markdown/SRT formats
-    └── FileDropZone.swift     # file drop area
+    ├── Batch.swift            # batch queue, output naming and file list
+    └── FileDropZone.swift     # drop area for files and folders
 ```
 
 To change the icon, edit `Icon/make_icon.swift` and regenerate it with:

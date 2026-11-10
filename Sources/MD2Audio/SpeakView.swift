@@ -16,6 +16,9 @@ struct SpeakView: View {
     @AppStorage("headingStyle") private var headingStyle = true
     @AppStorage("emphasis") private var emphasis = true
     @AppStorage("stripEmoji") private var stripEmoji = true
+    @AppStorage("naturalIntonation") private var naturalIntonation = true
+    /// Voice for English words in another language: "" = the best one, "off" = no detection.
+    @AppStorage("englishVoice") private var englishVoiceID = ""
     @AppStorage("pronunciations") private var pronunciations = "# word = how to say it\n"
 
     @State private var text = ""
@@ -23,12 +26,16 @@ struct SpeakView: View {
     @State private var outputURL: URL?
     @State private var voices: [AVSpeechSynthesisVoice] = []
     @State private var showSyntax = false
+    /// Batch output folder; nil = next to each file.
+    @State private var batchFolder: URL?
 
     @StateObject private var converter = Converter()
     @StateObject private var preview = SpeechPreview()
 
     private static let markdownTypes: [UTType] =
         [UTType(filenameExtension: "md"), UTType(filenameExtension: "markdown"), .plainText].compactMap { $0 }
+
+    private var isBatch: Bool { !converter.queue.isEmpty }
 
     var body: some View {
         HSplitView {
@@ -60,37 +67,57 @@ struct SpeakView: View {
 
     private var editorPane: some View {
         VStack(alignment: .leading, spacing: 12) {
-            FileDropZone(prompt: "Drop a Markdown file here or click to choose",
-                         types: Self.markdownTypes, url: sourceURL, onSelect: setInput)
+            FileDropZone(prompt: "Drop Markdown files here or click to choose",
+                         types: Self.markdownTypes, url: sourceURL, batchCount: converter.queue.count,
+                         onSelect: addInput)
+                .disabled(converter.isRunning)
             HStack {
-                Text("Text").font(.headline)
+                Text(isBatch ? "Files" : "Text").font(.headline)
                 Spacer()
-                Button("Syntax", systemImage: "questionmark.circle") { showSyntax.toggle() }
-                    .popover(isPresented: $showSyntax, arrowEdge: .bottom) {
-                        SyntaxHelp(punctuationPauseMs: punctuationPause, blockPauseScale: pause)
-                    }
-                Button("Paste", systemImage: "doc.on.clipboard", action: paste)
-                Button("Clear", systemImage: "xmark.circle", action: clear)
-                    .disabled(text.isEmpty && sourceURL == nil)
+                if isBatch {
+                    Button("Clear", systemImage: "xmark.circle", action: clear)
+                } else {
+                    textButtons
+                }
             }
             .controlSize(.small)
-            TextEditor(text: $text)
-                .font(.system(.body, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .padding(6)
-                .background(.background, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(alignment: .topLeading) {
-                    if text.isEmpty {
-                        Text("…or type or paste Markdown here (⌘V)")
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 11).padding(.vertical, 6)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
+            .disabled(converter.isRunning)
+            if isBatch {
+                // Stays enabled while running, to scroll and reveal finished files
+                BatchListView(queue: $converter.queue, isRunning: converter.isRunning)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                editor.disabled(converter.isRunning)
+            }
         }
-        .disabled(converter.isRunning)
+    }
+
+    @ViewBuilder private var textButtons: some View {
+        Button("Syntax", systemImage: "questionmark.circle") { showSyntax.toggle() }
+            .popover(isPresented: $showSyntax, arrowEdge: .bottom) {
+                SyntaxHelp(punctuationPauseMs: punctuationPause, blockPauseScale: pause)
+            }
+        Button("Paste", systemImage: "doc.on.clipboard", action: paste)
+        Button("Clear", systemImage: "xmark.circle", action: clear)
+            .disabled(text.isEmpty && sourceURL == nil)
+    }
+
+    private var editor: some View {
+        TextEditor(text: $text)
+            .font(.system(.body, design: .monospaced))
+            .scrollContentBackground(.hidden)
+            .padding(6)
+            .background(.background, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(alignment: .topLeading) {
+                if text.isEmpty {
+                    Text("…or type or paste Markdown here (⌘V)")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 11).padding(.vertical, 6)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
     }
 
     private var settingsPane: some View {
@@ -105,7 +132,7 @@ struct SpeakView: View {
             .disabled(converter.isRunning)
 
             actionBar
-            if let url = converter.resultURL, !converter.isRunning {
+            if let url = converter.resultURL, !converter.isRunning, !isBatch {
                 PlayerView(url: url)
                     .padding(12)
                     .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
@@ -145,6 +172,21 @@ struct SpeakView: View {
                 Text("This is a compact voice. Enhanced/Premium voices sound much more natural.")
                     .font(.caption).foregroundStyle(.orange)
             }
+            if !lang.hasPrefix("en") {
+                Picker("English words", selection: $englishVoiceID) {
+                    Text("Read by the main voice").tag("off")
+                    if let best = AVSpeechSynthesisVoice.best(for: "en", like: mainVoice, in: voices) {
+                        Text("Automatic · \(best.displayName)").tag("")
+                    }
+                    Section("English voices") {
+                        ForEach(voices.filter { $0.language.hasPrefix("en") }, id: \.identifier) { v in
+                            Text("\(v.displayName) · \(languageName(v.language))").tag(v.identifier)
+                        }
+                    }
+                }
+                Text("English words and phrases are found automatically and read by this voice. To choose yourself, write {en: machine learning}, or {\(lang.prefix(2)): come} to keep a word in the main voice.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             LabeledContent {
                 Button("Download Voices…", systemImage: "arrow.down.circle", action: openVoiceSettings)
             } label: {
@@ -171,6 +213,8 @@ struct SpeakView: View {
             slider("Pause at commas and dashes", value: $punctuationPause, range: 0...500, step: 25) { "\(Int($0)) ms" }
             slider("Pause between blocks", value: $pause, range: 0...3, step: 0.1) { String(format: "%.1f×", $0) }
             slider("Variation", value: $variation, range: 0...6, step: 0.5) { String(format: "±%.1f%%", $0) }
+            Toggle("Natural intonation", isOn: $naturalIntonation)
+                .help("Asides in parentheses are read lower and quicker, the pitch drifts down along a paragraph, and longer sentences are followed by a longer breath.")
             Toggle("Read headings slower and lower", isOn: $headingStyle)
             Toggle("Stress bold and italic text", isOn: $emphasis)
             Toggle("Skip emoji", isOn: $stripEmoji)
@@ -198,10 +242,22 @@ struct SpeakView: View {
             .pickerStyle(.segmented)
             LabeledContent("Save to") {
                 HStack {
-                    Text(outputURL?.path ?? "—")
-                        .lineLimit(1).truncationMode(.head)
-                        .foregroundStyle(.secondary)
-                    Button("Change…", action: chooseOutput)
+                    if isBatch {
+                        Text(batchFolder?.path ?? "Next to each file")
+                            .lineLimit(1).truncationMode(.head)
+                            .foregroundStyle(.secondary)
+                        if batchFolder != nil {
+                            Button("Next to Each File") { batchFolder = nil }
+                        }
+                        Button("Choose Folder…") {
+                            batchFolder = Batch.chooseFolder(startingAt: batchFolder) ?? batchFolder
+                        }
+                    } else {
+                        Text(outputURL?.path ?? "—")
+                            .lineLimit(1).truncationMode(.head)
+                            .foregroundStyle(.secondary)
+                        Button("Change…", action: chooseOutput)
+                    }
                 }
             }
         }
@@ -219,12 +275,13 @@ struct SpeakView: View {
                 Text(converter.status).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
                 Button(action: convert) {
-                    Label("Convert", systemImage: "waveform.badge.plus")
+                    Label(isBatch ? "Convert \(converter.queue.count) Files" : "Convert",
+                          systemImage: "waveform.badge.plus")
                 }
                 .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(isTextEmpty || outputURL == nil || voiceID.isEmpty)
+                .disabled(voiceID.isEmpty || (!isBatch && (isTextEmpty || outputURL == nil)))
             }
         }
     }
@@ -257,11 +314,25 @@ struct SpeakView: View {
         return natural > 0 ? "\(name) · \(natural) natural" : name
     }
 
+    private var mainVoice: AVSpeechSynthesisVoice? {
+        voices.first { $0.identifier == voiceID }
+    }
+
     private var style: SpeechStyle {
-        SpeechStyle(speed: speed, pitch: pitch, sentencePauseMs: sentencePause,
-                    punctuationPauseMs: punctuationPause, variation: variation,
-                    headingStyle: headingStyle, emphasis: emphasis, stripEmoji: stripEmoji,
-                    pronunciations: SpeechStyle.parsePronunciations(pronunciations), language: lang)
+        let voices = voices, main = mainVoice, english = englishVoiceID
+        return SpeechStyle(
+            speed: speed, pitch: pitch, sentencePauseMs: sentencePause,
+            punctuationPauseMs: punctuationPause, variation: variation,
+            headingStyle: headingStyle, emphasis: emphasis, stripEmoji: stripEmoji,
+            pronunciations: SpeechStyle.parsePronunciations(pronunciations), language: lang,
+            naturalIntonation: naturalIntonation, detectEnglish: english != "off",
+            voiceForLanguage: { code in
+                // The chosen English voice, if still installed; any other language gets its best voice
+                if code.lowercased().hasPrefix("en"), voices.contains(where: { $0.identifier == english }) {
+                    return english
+                }
+                return AVSpeechSynthesisVoice.best(for: code, like: main, in: voices)?.identifier
+            })
     }
 
     private func loadVoices() {
@@ -293,9 +364,10 @@ struct SpeakView: View {
     private func togglePreview() {
         if preview.isSpeaking { return preview.stop() }
         // The first blocks of the text, or a sample sentence
-        let markdown = isTextEmpty ? sampleText : text
+        let markdown = isBatch ? converter.queue.first.flatMap { try? TextFile.read($0.source) } ?? sampleText
+            : isTextEmpty ? sampleText : text
         let items = (try? Converter.script(for: markdown, style: style, pauseScale: pause)) ?? []
-        preview.speak(Array(items.prefix(3)), voiceID: voiceID)
+        preview.speak(Converter.firstBlocks(3, of: items), voiceID: voiceID)
     }
 
     private var sampleText: String {
@@ -312,15 +384,21 @@ struct SpeakView: View {
         text.allSatisfy(\.isWhitespace)
     }
 
+    /// One file goes into the editor; several (or more added to a batch) go into the batch queue.
+    private func addInput(_ urls: [URL]) {
+        if urls.count == 1, !isBatch { return setInput(urls[0]) }
+        Batch.append(urls, to: &converter.queue)
+        converter.status = ""
+    }
+
     /// Loads the file into the editor; the audio is saved next to it by default.
     private func setInput(_ url: URL) {
-        var encoding = String.Encoding.utf8
-        guard let contents = (try? String(contentsOf: url, encoding: .utf8))
-                ?? (try? String(contentsOf: url, usedEncoding: &encoding)) else {
-            converter.errorMessage = "Couldn't read \(url.lastPathComponent) as text."
+        do {
+            text = try TextFile.read(url)
+        } catch {
+            converter.errorMessage = error.localizedDescription
             return
         }
-        text = contents
         sourceURL = url
         resetOutput()
     }
@@ -333,6 +411,7 @@ struct SpeakView: View {
     }
 
     private func clear() {
+        converter.queue = []
         text = ""
         sourceURL = nil
         resetOutput()
@@ -360,8 +439,12 @@ struct SpeakView: View {
     }
 
     private func convert() {
-        guard !isTextEmpty, let outputURL else { return }
         preview.stop()
+        if isBatch {
+            return converter.runBatch(folder: batchFolder, format: format, voiceID: voiceID,
+                                      style: style, pauseScale: pause)
+        }
+        guard !isTextEmpty, let outputURL else { return }
         converter.run(markdown: text, output: outputURL, format: format, voiceID: voiceID,
                       style: style, pauseScale: pause)
     }

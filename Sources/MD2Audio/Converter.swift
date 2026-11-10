@@ -11,14 +11,24 @@ final class Converter: ObservableObject {
 
     private var writer: SpeechFileWriter?
 
-    /// Markdown -> (SSML, pause) per block, ready for the synthesizer.
+    /// Markdown -> utterances with their pauses, ready for the synthesizer.
     /// Silent blocks (dividers) lengthen the pause before the next spoken block,
     /// and a heading always gets at least its own pause before it too.
+    /// The items of the first `count` blocks, for a preview.
+    static func firstBlocks(_ count: Int, of items: [SpeechItem]) -> [SpeechItem] {
+        var blocks = 0
+        return Array(items.prefix { item in
+            defer { if !item.joined { blocks += 1 } }
+            return blocks < count
+        })
+    }
+
     static func script(for markdown: String, style: SpeechStyle, pauseScale: Double) throws
-        -> [(ssml: String, pause: Double)] {
-        var items: [(ssml: String, pause: Double)] = []
+        -> [SpeechItem] {
+        var items: [SpeechItem] = []
         for block in try MarkdownBlocks.parse(markdown) {
-            guard let ssml = SSMLBuilder.ssml(for: block, style: style) else {
+            var spoken = SSMLBuilder.items(for: block, style: style)
+            guard !spoken.isEmpty else {
                 if case .divider = block.kind, !items.isEmpty {
                     items[items.count - 1].pause = max(items[items.count - 1].pause, block.pause * pauseScale)
                 }
@@ -27,29 +37,21 @@ final class Converter: ObservableObject {
             if block.isHeading, !items.isEmpty {
                 items[items.count - 1].pause = max(items[items.count - 1].pause, block.pause * pauseScale)
             }
-            items.append((ssml, block.pause * pauseScale))
+            spoken[spoken.count - 1].pause = block.pause * pauseScale
+            items += spoken
         }
         return items
     }
 
     func run(markdown: String, output: URL, format: OutputFormat, voiceID: String,
              style: SpeechStyle, pauseScale: Double) {
-        guard !isRunning else { return }
-        isRunning = true
-        progress = 0
-        resultURL = nil
-        errorMessage = nil
-        status = "Preparing…"
-
+        guard start() else { return }
         Task {
-            let writer = SpeechFileWriter()
-            self.writer = writer
             do {
-                let items = try Self.script(for: markdown, style: style, pauseScale: pauseScale)
-                guard !items.isEmpty else { throw SpeechError.noText }
-                try await writer.write(items, voiceID: voiceID, format: format, to: output) { i in
-                    progress = Double(i - 1) / Double(items.count)
-                    status = "Block \(i) of \(items.count)"
+                try await convert(markdown, to: output, format: format, voiceID: voiceID,
+                                  style: style, pauseScale: pauseScale) { i, n in
+                    progress = Double(i - 1) / Double(n)
+                    status = "Part \(i) of \(n)"
                 }
                 progress = 1
                 status = "Done"
@@ -61,11 +63,91 @@ final class Converter: ObservableObject {
                 errorMessage = error.localizedDescription
             }
             isRunning = false
-            self.writer = nil
         }
     }
 
+    // MARK: Batch
+
+    /// Files queued for a batch conversion, with their status.
+    @Published var queue: [BatchItem] = []
+
+    /// Converts every queued file, each saved in `folder` (or next to its source).
+    /// A failing file is marked and the batch goes on with the next one.
+    func runBatch(folder: URL?, format: OutputFormat, voiceID: String, style: SpeechStyle, pauseScale: Double) {
+        guard !queue.isEmpty, start() else { return }
+        for i in queue.indices { queue[i].state = .pending }
+        Task {
+            var used = Set<String>()
+            let count = queue.count
+            for i in queue.indices {
+                if cancelled {
+                    queue[i].state = .cancelled
+                    continue
+                }
+                let source = queue[i].source
+                let output = Batch.outputURL(for: source, folder: folder, ext: format.fileExtension, used: &used)
+                queue[i].state = .running
+                do {
+                    let markdown = try TextFile.read(source)
+                    try await convert(markdown, to: output, format: format, voiceID: voiceID,
+                                      style: style, pauseScale: pauseScale) { b, n in
+                        progress = (Double(i) + Double(b - 1) / Double(n)) / Double(count)
+                        status = "File \(i + 1) of \(count) · \(source.lastPathComponent) · part \(b) of \(n)"
+                    }
+                    queue[i].state = .done(output)
+                } catch is CancellationError {
+                    queue[i].state = .cancelled
+                } catch {
+                    queue[i].state = .failed(error.localizedDescription)
+                }
+            }
+            progress = 1
+            status = cancelled ? "Cancelled" : Batch.summary(queue)
+            isRunning = false
+        }
+    }
+
+    // MARK: Shared
+
+    private var cancelled = false
+
+    private func start() -> Bool {
+        guard !isRunning else { return false }
+        isRunning = true
+        cancelled = false
+        progress = 0
+        resultURL = nil
+        errorMessage = nil
+        status = "Preparing…"
+        return true
+    }
+
+    private func convert(_ markdown: String, to output: URL, format: OutputFormat, voiceID: String,
+                         style: SpeechStyle, pauseScale: Double,
+                         onBlock: (_ index: Int, _ count: Int) -> Void) async throws {
+        let items = try Self.script(for: markdown, style: style, pauseScale: pauseScale)
+        guard !items.isEmpty else { throw SpeechError.noText }
+        let writer = SpeechFileWriter()
+        self.writer = writer
+        defer { self.writer = nil }
+        if cancelled { throw CancellationError() }
+        try await writer.write(items, voiceID: voiceID, format: format, to: output) { onBlock($0, items.count) }
+    }
+
     func cancel() {
+        cancelled = true
         writer?.cancel()
+    }
+}
+
+enum TextFile {
+    /// Reads a text file as UTF-8, or in the encoding it declares or that can be detected.
+    static func read(_ url: URL) throws -> String {
+        var encoding = String.Encoding.utf8
+        if let text = (try? String(contentsOf: url, encoding: .utf8))
+            ?? (try? String(contentsOf: url, usedEncoding: &encoding)) { return text }
+        throw CocoaError(.fileReadInapplicableStringEncoding, userInfo: [
+            NSLocalizedDescriptionKey: "Couldn't read \(url.lastPathComponent) as text.",
+        ])
     }
 }

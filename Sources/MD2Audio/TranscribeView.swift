@@ -12,18 +12,18 @@ struct TranscribeView: View {
     @State private var text = ""
     @State private var locales: [Locale] = []
     @State private var installed: Set<String> = []
+    /// Batch output folder; nil = next to each audio file.
+    @State private var batchFolder: URL?
 
     @StateObject private var transcriber = Transcriber()
 
+    private var isBatch: Bool { !transcriber.queue.isEmpty }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            FileDropZone(prompt: "Drop an audio file here or click to choose",
-                         types: [.audio], url: audioURL) { url in
-                audioURL = url
-                text = ""
-                transcriber.segments = []
-                transcriber.status = ""
-            }
+            FileDropZone(prompt: "Drop audio files here or click to choose",
+                         types: [.audio], url: audioURL, batchCount: transcriber.queue.count,
+                         onSelect: addInput)
             .disabled(transcriber.isRunning)
 
             Form {
@@ -43,38 +43,46 @@ struct TranscribeView: View {
                     .pickerStyle(.segmented)
                     Toggle("Timestamps", isOn: $timestamps)
                         .disabled(format == .srt)
+                    if isBatch {
+                        LabeledContent("Save to") {
+                            HStack {
+                                Text(batchFolder?.path ?? "Next to each file")
+                                    .lineLimit(1).truncationMode(.head)
+                                    .foregroundStyle(.secondary)
+                                if batchFolder != nil {
+                                    Button("Next to Each File") { batchFolder = nil }
+                                }
+                                Button("Choose Folder…") {
+                                    batchFolder = Batch.chooseFolder(startingAt: batchFolder) ?? batchFolder
+                                }
+                            }
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
-            .frame(height: 230)
+            .frame(height: isBatch ? 270 : 230)
             .disabled(transcriber.isRunning)
 
             actionBar
 
-            TextEditor(text: $text)
-                .font(.system(.body, design: format == .srt ? .monospaced : .default))
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-                .overlay {
-                    if text.isEmpty {
-                        Text(transcriber.isRunning ? "Listening…" : "The transcript will appear here.")
-                            .foregroundStyle(.secondary)
+            if isBatch {
+                BatchListView(queue: $transcriber.queue, isRunning: transcriber.isRunning)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .frame(minHeight: 160)
+                HStack {
+                    Text("Each transcript is saved as soon as its file is done.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear", systemImage: "xmark.circle") {
+                        transcriber.queue = []
+                        transcriber.status = ""
                     }
+                    .disabled(transcriber.isRunning)
                 }
-                .frame(minHeight: 160)
-
-            HStack {
-                Text("\(text.split(whereSeparator: \.isWhitespace).count) words")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Copy", systemImage: "doc.on.doc") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                }
-                Button("Save As…", systemImage: "square.and.arrow.down", action: save)
+            } else {
+                transcriptEditor
             }
-            .disabled(text.isEmpty || transcriber.isRunning)
         }
         .padding(20)
         .task { await loadLocales() }
@@ -90,6 +98,33 @@ struct TranscribeView: View {
         }
     }
 
+    @ViewBuilder private var transcriptEditor: some View {
+        TextEditor(text: $text)
+            .font(.system(.body, design: format == .srt ? .monospaced : .default))
+            .scrollContentBackground(.hidden)
+            .padding(8)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                if text.isEmpty {
+                    Text(transcriber.isRunning ? "Listening…" : "The transcript will appear here.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(minHeight: 160)
+
+        HStack {
+            Text("\(text.split(whereSeparator: \.isWhitespace).count) words")
+                .font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("Copy", systemImage: "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            Button("Save As…", systemImage: "square.and.arrow.down", action: save)
+        }
+        .disabled(text.isEmpty || transcriber.isRunning)
+    }
+
     private var actionBar: some View {
         HStack(spacing: 12) {
             if transcriber.isRunning {
@@ -102,12 +137,13 @@ struct TranscribeView: View {
                 Text(transcriber.status).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
                 Button(action: transcribe) {
-                    Label("Transcribe", systemImage: "text.bubble")
+                    Label(isBatch ? "Transcribe \(transcriber.queue.count) Files" : "Transcribe",
+                          systemImage: "text.bubble")
                 }
                 .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(audioURL == nil || locales.isEmpty)
+                .disabled((audioURL == nil && !isBatch) || locales.isEmpty)
             }
         }
     }
@@ -130,10 +166,27 @@ struct TranscribeView: View {
         }
     }
 
+    /// One file is transcribed into the editor; several (or more added to a batch) go into the batch queue.
+    private func addInput(_ urls: [URL]) {
+        if urls.count == 1, !isBatch {
+            audioURL = urls[0]
+            text = ""
+            transcriber.segments = []
+        } else {
+            Batch.append(urls, to: &transcriber.queue)
+        }
+        transcriber.status = ""
+    }
+
     private func transcribe() {
-        guard let audioURL else { return }
-        text = ""
-        transcriber.run(url: audioURL, locale: Locale(identifier: localeID))
+        let locale = Locale(identifier: localeID)
+        if isBatch {
+            transcriber.runBatch(locale: locale, format: format, timestamps: timestamps, folder: batchFolder)
+        } else {
+            guard let audioURL else { return }
+            text = ""
+            transcriber.run(url: audioURL, locale: locale)
+        }
         Task {
             // Refresh the "downloaded" markers once a new model is installed
             while transcriber.isRunning { try? await Task.sleep(for: .seconds(1)) }
@@ -142,6 +195,7 @@ struct TranscribeView: View {
     }
 
     private func render() {
+        guard !isBatch else { return }
         text = TranscriptFormatter.render(
             transcriber.segments, format: format, timestamps: timestamps,
             title: audioURL?.deletingPathExtension().lastPathComponent ?? "Transcript")

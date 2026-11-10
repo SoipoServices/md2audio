@@ -1,4 +1,4 @@
-#!/bin/sh
+i w#!/bin/sh
 # Builds MD2Audio.app (Universal: Apple Silicon + Intel) and packages it for sharing.
 #
 #   ./build_app.sh                      # build/MD2Audio.app + dist/MD2Audio-<version>.dmg/.zip
